@@ -31,7 +31,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import SGD, Adam, AdamW, lr_scheduler
 from tqdm import tqdm
 
-FILE = Path(__file__).resolve()
+FILE = Path(__file__).resolve()                         # __file__获得当前.py文件的绝对路劲
 ROOT = FILE.parents[0]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
@@ -78,6 +78,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             hyp = yaml.safe_load(f)  # load hyps dict
     LOGGER.info(colorstr('hyperparameters: ') + ', '.join(f'{k}={v}' for k, v in hyp.items()))
 
+    # 这里的意思是训练时候用了什么参数设置比如超参数hyp.yaml或者opt.yaml在训练之前保存在项目文件夹里面
     # Save run settings
     if not evolve:
         with open(save_dir / 'hyp.yaml', 'w') as f:
@@ -97,13 +98,32 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         # Register actions
         for k in methods(loggers):
             callbacks.register_action(k, callback=getattr(loggers, k))
+            ## getattr(object, name, default) 返回对象属性值，比如
+            #   class A(object):
+            #       bar = 1
+            #   a = A()
+            #   getarrt(a, "bar")
+            #$  1
+            #   getattr(a, "bar2")
+            #$  报错
+            
 
     # Config
     plots = not evolve and not opt.noplots  # create plots
     cuda = device.type != 'cpu'
     init_seeds(1 + RANK)
+    
+    #   data_dict = {
+    #       'path': '/home/cssdcc/workspace/dataset/eye_location', 
+    #       'train': '/home/cssdcc/workspace/dataset/eye_location/train.txt', 
+    #       'val': '/home/cssdcc/workspace/dataset/eye_location/val.txt', 
+    #       'test': '/home/cssdcc/workspace/dataset/eye_location/test.txt', 
+    #       'nc': 2, 
+    #       'names': ['right', 'left']
+    #   }
     with torch_distributed_zero_first(LOCAL_RANK):
         data_dict = data_dict or check_dataset(data)  # check if None
+        
     train_path, val_path = data_dict['train'], data_dict['val']
     nc = 1 if single_cls else int(data_dict['nc'])  # number of classes
     names = ['item'] if single_cls and len(data_dict['names']) != 1 else data_dict['names']  # class names
@@ -112,6 +132,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
     # Model
     check_suffix(weights, '.pt')  # check weights
+    ## python str.endswith(suffix)方法用于判断字符串是否以指定的后缀结尾
     pretrained = weights.endswith('.pt')
     if pretrained:
         with torch_distributed_zero_first(LOCAL_RANK):
@@ -152,8 +173,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
     g = [], [], []  # optimizer parameter groups
     bn = tuple(v for k, v in nn.__dict__.items() if 'Norm' in k)  # normalization layers, i.e. BatchNorm2d()
-    for v in model.modules():
-        if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):  # bias
+    for v in model.modules(): # isinstance(object, classinfo) return true if object is an instance of the classinfo
+        if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):  # bias # hasattr(object, names) return true is object has names
             g[2].append(v.bias)
         if isinstance(v, bn):  # weight (no decay)
             g[1].append(v.weight)
@@ -167,6 +188,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     else:
         optimizer = SGD(g[2], lr=hyp['lr0'], momentum=hyp['momentum'], nesterov=True)
 
+    # optimizer.add_param_group()，可以对不同层用不同的lr和weight_decay，即网络分组进行优化
     optimizer.add_param_group({'params': g[0], 'weight_decay': hyp['weight_decay']})  # add g0 with weight_decay
     optimizer.add_param_group({'params': g[1]})  # add g1 (BatchNorm2d weights)
     LOGGER.info(f"{colorstr('optimizer:')} {type(optimizer).__name__} with parameter groups "
@@ -456,7 +478,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                         batch_size=batch_size // WORLD_SIZE * 2,
                         imgsz=imgsz,
                         model=attempt_load(f, device).half(),
-                        iou_thres=0.65 if is_coco else 0.60,  # best pycocotools results at 0.65
+                        # iou_thres=0.65 if is_coco else 0.60,  # best pycocotools results at 0.65
+                        iou_thres=0.1,
                         single_cls=single_cls,
                         dataloader=val_loader,
                         save_dir=save_dir,
@@ -476,27 +499,44 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
 def parse_opt(known=False):
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', type=str, default=ROOT / 'yolov5s.pt', help='initial weights path')
-    parser.add_argument('--cfg', type=str, default='', help='model.yaml path')
-    parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='dataset.yaml path')
+    parser.add_argument('--weights', type=str, default=ROOT / 'yolov5s.pt', help='initial weights path')    # 预训练模型
+    parser.add_argument('--cfg', type=str, default='', help='model.yaml path')                              # 构建模型
+    parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='dataset.yaml path')   # 训练的数据
     parser.add_argument('--hyp', type=str, default=ROOT / 'data/hyps/hyp.scratch-low.yaml', help='hyperparameters path')
     parser.add_argument('--epochs', type=int, default=300)
     parser.add_argument('--batch-size', type=int, default=16, help='total batch size for all GPUs, -1 for autobatch')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='train, val image size (pixels)')
     parser.add_argument('--rect', action='store_true', help='rectangular training')
+    
+    ## resume 重新开始、继续、重新回到。这里应该是继续上一次训练的意思，因为加载的.pt文件里面除了权重文件还包含了优化器等训练信息。
+    ## 参数是具体的.pt文件
+    ## nargs argparse中的参数个数，*是0个或多个，+是一个或多个，？是0个或一个
     parser.add_argument('--resume', nargs='?', const=True, default=False, help='resume most recent training')
+    
     parser.add_argument('--nosave', action='store_true', help='only save final checkpoint')
     parser.add_argument('--noval', action='store_true', help='only validate final epoch')
     parser.add_argument('--noautoanchor', action='store_true', help='disable AutoAnchor')
     parser.add_argument('--noplots', action='store_true', help='save no plot files')
+    
+    ## evolve 进化、发展、演变， 超参数还可以进化？
     parser.add_argument('--evolve', type=int, nargs='?', const=300, help='evolve hyperparameters for x generations')
+    
+    ## ？？没动bucket
     parser.add_argument('--bucket', type=str, default='', help='gsutil bucket')
+    
+    ## 图片放在内存RAM里还是硬盘里
     parser.add_argument('--cache', type=str, nargs='?', const='ram', help='--cache images in "ram" (default) or "disk"')
+    
+    ## ？？没懂
     parser.add_argument('--image-weights', action='store_true', help='use weighted image selection for training')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--multi-scale', action='store_true', help='vary img-size +/- 50%%')
     parser.add_argument('--single-cls', action='store_true', help='train multi-class data as single-class')
+    # parser.add_argument('--single-cls', type=bool, default=True, help='train multi-class data as single-class')
+    
     parser.add_argument('--optimizer', type=str, choices=['SGD', 'Adam', 'AdamW'], default='SGD', help='optimizer')
+    
+    ## 使得BN的模式是同步BN，即SyncBatchNorm，DDP的全程是DistributedDataParallel分布式训练的意思
     parser.add_argument('--sync-bn', action='store_true', help='use SyncBatchNorm, only available in DDP mode')
     parser.add_argument('--workers', type=int, default=8, help='max dataloader workers (per RANK in DDP mode)')
     parser.add_argument('--project', default=ROOT / 'runs/train', help='save to project/name')
@@ -504,10 +544,13 @@ def parse_opt(known=False):
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--quad', action='store_true', help='quad dataloader')
     parser.add_argument('--cos-lr', action='store_true', help='cosine LR scheduler')
+    
+    ## label-smoothing 标签平滑，一个知识点，以一种正则化的方式，设置额外的参数epsilon，对loss函数进行修改，以抑制过拟合
     parser.add_argument('--label-smoothing', type=float, default=0.0, help='Label smoothing epsilon')
     parser.add_argument('--patience', type=int, default=100, help='EarlyStopping patience (epochs without improvement)')
     parser.add_argument('--freeze', nargs='+', type=int, default=[0], help='Freeze layers: backbone=10, first3=0 1 2')
     parser.add_argument('--save-period', type=int, default=-1, help='Save checkpoint every x epochs (disabled if < 1)')
+    ## local_rank ddp参数，请勿修改
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
 
     # Weights & Biases arguments
@@ -525,7 +568,7 @@ def main(opt, callbacks=Callbacks()):
     if RANK in {-1, 0}:
         print_args(vars(opt))
         check_git_status()
-        check_requirements(exclude=['thop'])
+        check_requirements(exclude=['thop']) # 查看环境配置是否满足要求，requestments.txt
 
     # Resume
     if opt.resume and not check_wandb_resume(opt) and not opt.evolve:  # resume an interrupted run

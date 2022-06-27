@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 if platform.system() != 'Windows':
     ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
-from models.common import *
+from models.common import * # 这里import了所有yolov5官方定义的卷积类型和BN类型
 from models.experimental import *
 from utils.autoanchor import check_anchor_order
 from utils.general import LOGGER, check_version, check_yaml, make_divisible, print_args
@@ -256,8 +256,13 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
     no = na * (nc + 5)  # number of outputs = anchors * (classes + 5)
 
     layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
+    ## 列表相加是在最外面一个维度进行叠加append
+    # >>> a = [[1,2]]
+    # >>> b = [[3,4]]
+    # >>> a+b
+    # [[1, 2], [3, 4]]
     for i, (f, n, m, args) in enumerate(d['backbone'] + d['head']):  # from, number, module, args
-        m = eval(m) if isinstance(m, str) else m  # eval strings
+        m = eval(m) if isinstance(m, str) else m  # eval strings ## eval("str")可以把字符串转成具体表达式的值
         for j, a in enumerate(args):
             try:
                 args[j] = eval(a) if isinstance(a, str) else a  # eval strings
@@ -265,15 +270,18 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
                 pass
 
         n = n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain
+        
+        ## !!!!!
+        ## 可以在这里进行Yolov5基本模块的更换
         if m in (Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, MixConv2d, Focus, CrossConv,
                  BottleneckCSP, C3, C3TR, C3SPP, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x):
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
                 c2 = make_divisible(c2 * gw, 8)
 
-            args = [c1, c2, *args[1:]]
+            args = [c1, c2, *args[1:]] # [in_channel, out_channel, kernel_size,] ## *[list]把列表中的元素解析为一个个单独的参数返回
             if m in [BottleneckCSP, C3, C3TR, C3Ghost, C3x]:
-                args.insert(2, n)  # number of repeats
+                args.insert(2, n)  # number of repeats ## insert在列表指定位置插入变量
                 n = 1
         elif m is nn.BatchNorm2d:
             args = [ch[f]]
@@ -291,8 +299,12 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             c2 = ch[f]
 
         m_ = nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
+        ## 对一个类直接用类名，python会输出他的类名，如：
+        # Conv是一个类，直接Conv会输出<class 'models.commom.Conv'>
+        # str(Conv)就把输出变为字符串
+        # str(Conv)[8:-2] 把前面的 "<class ' 删掉了，然后把后面的  '> 删掉了
         t = str(m)[8:-2].replace('__main__.', '')  # module type
-        np = sum(x.numel() for x in m_.parameters())  # number params
+        np = sum(x.numel() for x in m_.parameters())  # number params 这一层的参数量
         m_.i, m_.f, m_.type, m_.np = i, f, t, np  # attach index, 'from' index, type, number params
         LOGGER.info(f'{i:>3}{str(f):>18}{n_:>3}{np:10.0f}  {t:<40}{str(args):<30}')  # print
         save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
